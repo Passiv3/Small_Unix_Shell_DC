@@ -13,12 +13,15 @@
 * separate
 */
 
+/* Structure to store the user input
+*/
 struct entry {
 	char* command;
 	char* arguments;
 	char* redirectedIn;
 	char* redirectedOut;
 	int background;
+	int argCounter;
 };
 
 /* readLine function
@@ -30,24 +33,26 @@ char* readLine(void) {
 	size_t buffsize = 0;
 
 	getline(&input, &buffsize, stdin);
+	input[strlen(input) - 1] = 0;
 
 	return input;
 }
 
 /* function buildEntry
-* takes user input as an argument
+* takes pointer to user input as an argument
 * tokenizes into an array of arguments
-* returns array
+* returns pointer to structure
 */
 struct entry* buildEntry(char* userIn) {
 	struct entry* currEntry = malloc(sizeof(struct entry));
 	size_t newSpace;
+	int counter = 0;
 	int flag = 0;		// flag 0 = initial, 1 = arguments, 2 = input, 3 = output, 4 = ampersand check
-
 	char* saveptr;
 	char* token = strtok_r(userIn, " ", &saveptr);
-	while (token != NULL) {
 
+	while (token != NULL) {
+		// Checks if input or output is entered, sets flag and progresses token to next value if it does
 		if (strcmp(token, "<") == 0) {
 			flag = 2;
 			token = strtok_r(NULL, " ", &saveptr);
@@ -56,6 +61,7 @@ struct entry* buildEntry(char* userIn) {
 			flag = 3;
 			token = strtok_r(NULL, " ", &saveptr);
 		}
+		// switch checks flag, allocates information to structure
 		switch (flag) {
 		case 0:
 			currEntry->command = calloc(strlen(token) + 1, sizeof(char));
@@ -68,10 +74,14 @@ struct entry* buildEntry(char* userIn) {
 				currEntry->arguments = realloc(currEntry->arguments, newSpace);
 				strcat(currEntry->arguments, " ");
 				strcat(currEntry->arguments, token);
+				counter += 1;
+				currEntry->argCounter = counter;
 			}
 			else {
 				currEntry->arguments = calloc(strlen(token) + 1, sizeof(char));
 				strcpy(currEntry->arguments, token);
+				counter += 1;
+				currEntry->argCounter = counter;
 			}
 			break;
 		case 2:
@@ -85,23 +95,74 @@ struct entry* buildEntry(char* userIn) {
 			flag = 4;
 			break;
 		case 4:
-			if (strcmp(token, "&\n") == 0) {
+			if (strcmp(token, "&") == 0) {
 				currEntry->background = 1;
 			}
 			break;
 		}
 		token = strtok_r(NULL, " ", &saveptr);
 	}
-	
 	return currEntry;
 }
 
 /* function execute
-* 
+* takes pointer to entry structure
 */
-int execute(struct entry* argument) {
-	
+int execute(struct entry* currEntry) {
+	if (strcmp(currEntry->command, "exit") == 0) {
+		closeProcesses(currEntry);
+		return 1;
+	}
+	else if (strcmp(currEntry->command, "cd") == 0){
+		changeDirectory(currEntry);
+		return 0;
+	}
+	else if (strcmp(currEntry->command, "status") == 0) {
+		getStatus(currEntry);
+		return 0;
+	}
+	else {
+		return;
+	}
 	return 0;
+}
+
+void closeProcesses(struct entry* currEntry) {
+	return;
+}
+
+void changeDirectory(struct entry* currEntry) {
+	char* homeDir = getenv("HOME");
+	char* envPATH = getenv("PATH");
+
+	char cwd[256];
+
+	if (currEntry->arguments == NULL) {
+		chdir(homeDir);
+		fprintf(stdout, "current directory set to HOME: %s\n", getcwd(cwd, sizeof(cwd)));
+		fflush(stdout);
+	}
+	else if (currEntry->argCounter > 1) {
+		fprintf(stdout, "Too many arguments found");
+		fflush(stdout);
+		return;
+	}
+	else if (currEntry->arguments[0] == '/') {
+		if (chdir(currEntry->arguments) == -1) {
+			fprintf(stdout, "Error has occurred");
+			fflush(stdout);
+		}
+		else {
+			fprintf(stdout, "current directory set to: %s\n", getcwd(cwd, sizeof(cwd)));
+			fflush(stdout);
+		}
+	}
+	return;
+}
+
+void getStatus(struct entry* currEntry) {
+
+	return;
 }
 
 /* main function
@@ -111,15 +172,16 @@ int main(int argc, char* argv[]) {
 	int again;
 
 	// main loop, continues until status
-//	do {
+	do {
 		printf(": ");
 		userInput = readLine();
 		struct entry* arguments = buildEntry(userInput);
 		again = execute(arguments);
 
 		free(userInput);
+		free(arguments);
 
-//	} while (status);
+	} while (again == 0);
 
 	return EXIT_SUCCESS;
 }
