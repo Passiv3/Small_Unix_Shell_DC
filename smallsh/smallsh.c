@@ -9,7 +9,7 @@
 * get started on this assignment:
 * https://brennan.io/2015/01/16/write-a-shell-in-c/
 * I got the idea of the general program layout from this link
-* things like having the do while loop
+* things like having the do while loop in main
 * and building the readLine, getArgs, and execution lines
 * separate
 */
@@ -95,18 +95,30 @@ struct entry* buildEntry(char* userIn) {
 	size_t newSpace;
 	int counter = 0;
 	int flag = 0;		// flag 0 = initial, 1 = arguments, 2 = input, 3 = output, 4 = ampersand check
+	int argFlag = 0;	// If arg flag is set, any additional arguments that are not input, output, or an ampersand are ignored
 	char* saveptr;
-	char* token = strtok_r(userIn, " ", &saveptr);
+	char* token = strtok_r(userIn, " ", &saveptr);			// Split first token from userIn
+
 
 	while (token != NULL) {
 		// Checks if input or output is entered, sets flag and progresses token to next value if it does
+		// Once input or output is entered, argFlag is set
 		if (strcmp(token, "<") == 0) {
 			flag = 2;
 			token = strtok_r(NULL, " ", &saveptr);
+			argFlag = 1;
 		}
 		else if (strcmp(token, ">") == 0) {
 			flag = 3;
 			token = strtok_r(NULL, " ", &saveptr);
+			argFlag = 1;
+		}
+		else if (strcmp(token, "&") == 0 && strtok_r(NULL, " ", &saveptr) == NULL) {		// Only sets flag to 4 if ampersand is last value of input
+			flag = 4;
+		}
+		else if (argFlag == 1) {			// ignores any additional arguments if argFlag is set
+			token = strtok_r(NULL, " ", &saveptr);
+			continue;
 		}
 		// Expands the '$$' if it is detected in the token
 		if (strstr(token, "$$") != NULL) {
@@ -120,7 +132,8 @@ struct entry* buildEntry(char* userIn) {
 			strcpy(currEntry->command, token);
 			flag = 1;
 			break;
-		// case 1 will be for the arguments
+		// case 1 will be for the arguments arguments will only be enterable after the command has been populated
+			// additional arguments after a redirection will simply be ignored
 		case 1:
 			if (currEntry->arguments != NULL){
 				newSpace = sizeof(currEntry->arguments) + sizeof(token) + 2;
@@ -141,13 +154,11 @@ struct entry* buildEntry(char* userIn) {
 		case 2:
 			currEntry->redirectedIn = calloc(strlen(token) + 1, sizeof(char));
 			strcpy(currEntry->redirectedIn, token);
-			flag = 4;
 			break;
 		// case 3 is for redirectedOut
 		case 3:
 			currEntry->redirectedOut = calloc(strlen(token) + 1, sizeof(char));
 			strcpy(currEntry->redirectedOut, token);
-			flag = 4;
 			break;
 		// case 4 is for the ampersand, signifying process is to be run in the background
 		case 4:
@@ -156,7 +167,7 @@ struct entry* buildEntry(char* userIn) {
 			}
 			break;
 		}
-		token = strtok_r(NULL, " ", &saveptr);
+		token = strtok_r(NULL, " ", &saveptr);					// Split new token
 	}
 	return currEntry;
 }
@@ -260,6 +271,15 @@ void redirection(struct entry* currEntry) {
 		}
 		fcntl(targetOut, F_SETFD, FD_CLOEXEC);					// Sets FD to close once child has finished execution
 	}
+	if ((currEntry->redirectedIn == NULL || currEntry->redirectedOut == NULL) && currEntry->background != 0) {
+		int targetNull = open("/dev/null", O_RDWR);
+		if (currEntry->redirectedIn == NULL){
+			int changeInput = dup2(targetNull, 0);			// Redirects to dev/null if process is to be run in background 
+		}													// and no redirection has been done
+		if (currEntry->redirectedOut == NULL){
+			int changeOutput = dup2(targetNull, 1);
+		}													
+	}
 	return;
 }
 
@@ -283,11 +303,11 @@ void forkChild(struct entry* currEntry) {
 	case 0:  // Child process
 		fprintf(stdout, "Child Process %d Executing: \n", getpid());
 		fflush(stdout);
-		if (currEntry->redirectedIn != NULL || currEntry->redirectedOut != NULL) {
-			redirection(currEntry);
-		}
+
+		redirection(currEntry);
 		sleep(5);
 		execvp(currEntry->command, newArgv);
+
 		perror("execvp");
 		exit(EXIT_FAILURE);
 		break;
