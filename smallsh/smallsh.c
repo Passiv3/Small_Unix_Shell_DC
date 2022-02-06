@@ -41,19 +41,40 @@ char* readLine(void) {
 }
 
 /* Expands $$
-* ******WIP****
+* Wow, this is really bad, but in desperation, this is what I came up with
+* Takes pointer to token, returns pointer 
 */
-char* word(char* ptrToToken) {
+char* expand(char* ptrToToken) {
 	int count = 0;
+	char pidStr [20];
+	const char* tmp = ptrToToken;
+	int i;
+	int j = 0;
+	int n;
 
-	pid_t getpid(void);
-	char* newBlock = malloc((strlen(ptrToToken)) + count);
-	while (ptrToToken = strstr(ptrToToken, "$$")) {
-		
+	pid_t getpid();
+	sprintf(pidStr, "%d", getpid);
+	// Counts the occurences of $$ to allocate sufficient memory
+	while (tmp = strstr(tmp, "$$")) {
+		count++;
+		tmp++;
 	}
-	ptrToToken = newBlock;
-
-	return ptrToToken;
+	char* newBlock = malloc((strlen(ptrToToken)) + count*strlen(pidStr)+1);
+	for (i = 0; i <= strlen(ptrToToken); i++) {
+		if (ptrToToken[i] == '$' && ptrToToken[i + 1] == '$') {		// If the current index and the next index is $$
+			for (n = 0; n < strlen(pidStr); n++) {			// adds the pid string to the new memory allocation
+				newBlock[j] = pidStr[n];
+				j++;
+			}
+			i++;
+		}
+		else {									// Otherwise, copy the original string bit by bit
+			newBlock[j] = ptrToToken[i];
+			j++;
+		}
+	}
+	ptrToToken = newBlock;			// Reassign pointerToToken, this doesn't really matter since I can't even free it
+	return ptrToToken;				// Return
 }
 
 /* function buildEntry
@@ -89,7 +110,7 @@ struct entry* buildEntry(char* userIn) {
 		}
 		// Expands the '$$' if it is detected in the token
 		if (strstr(token, "$$") != NULL) {
-			return;
+			token = expand(token);
 		}
 		// switch checks flag, allocates information to structure
 		switch (flag) {
@@ -265,6 +286,7 @@ void forkChild(struct entry* currEntry) {
 		if (currEntry->redirectedIn != NULL || currEntry->redirectedOut != NULL) {
 			redirection(currEntry);
 		}
+		sleep(5);
 		execvp(currEntry->command, newArgv);
 		perror("execvp");
 		exit(EXIT_FAILURE);
@@ -292,6 +314,9 @@ int main(int argc, char* argv[]) {
 			continue;
 		}
 		struct entry* arguments = buildEntry(userInput);
+		if (arguments->command == NULL) {
+			continue;
+		}
 		leave = execute(arguments);
 
 		free(userInput);
