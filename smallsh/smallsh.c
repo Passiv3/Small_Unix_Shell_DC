@@ -1,9 +1,12 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
+#define _POSIX_C_SOURCE 200809L
 #include <sys/types.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
+#include <sys/wait.h>
 
 /* I did not plagiarize off of this, but this really helped me
 * get started on this assignment:
@@ -16,6 +19,11 @@
 
 /* Structure to store the user input
 */
+int globalStatus = 0;
+int processes[20];
+int processIndx = 0;
+int fgOnlyFlag = 0;
+
 struct entry {
 	char* command;
 	char* arguments;
@@ -113,7 +121,7 @@ struct entry* buildEntry(char* userIn) {
 			token = strtok_r(NULL, " ", &saveptr);
 			argFlag = 1;
 		}
-		else if (strcmp(token, "&") == 0 && strtok_r(NULL, " ", &saveptr) == NULL) {		// Only sets flag to 4 if ampersand is last value of input
+		else if (strcmp(token, "&") == 0 && strtok_r(NULL, " ", &saveptr) == NULL && fgOnlyFlag == 0) {		// Only sets flag to 4 if ampersand is last value of input and fgOnly is off
 			flag = 4;
 		}
 		else if (argFlag == 1) {			// ignores any additional arguments if argFlag is set
@@ -199,6 +207,7 @@ int execute(struct entry* currEntry) {
 * WIP
 */
 void closeProcesses(struct entry* currEntry) {
+	int i;
 	return;
 }
 
@@ -238,7 +247,7 @@ void changeDirectory(struct entry* currEntry) {
 
 /*Returns the status*/
 void getStatus(struct entry* currEntry) {
-
+	printf("exit value %d\n", globalStatus);
 	return;
 }
 
@@ -294,6 +303,8 @@ void forkChild(struct entry* currEntry) {
 	};
 	int childStatus;
 	pid_t spawnPid = fork();
+	processes[processIndx] = spawnPid;
+	processIndx++;
 
 	switch (spawnPid) {
 	case -1:
@@ -301,22 +312,95 @@ void forkChild(struct entry* currEntry) {
 		exit(1);
 		break;
 	case 0:  // Child process
-		fprintf(stdout, "Child Process %d Executing: \n", getpid());
-		fflush(stdout);
+		if (currEntry->background == 1) {
+			fprintf(stdout, "Background PID is %d\n", getpid());
+			fflush(stdout);
+		}
 
 		redirection(currEntry);
 		sleep(5);
 		execvp(currEntry->command, newArgv);
 
-		perror("execvp");
+		perror("execvp\n");
 		exit(EXIT_FAILURE);
 		break;
 	default:  // Parent Process
-		spawnPid = waitpid(spawnPid, &childStatus, 0);
-		fprintf(stdout, "Parent Process Finished\n");
-		fflush(stdout);
+		if (currEntry->background == 1) {						// If background is set, no wait will occur
+			fprintf(stdout, "Process continuing in background, returning to command line\n");
+			fflush(stdout);
+			pid_t childPid = waitpid(spawnPid, &childStatus, WNOHANG);
+			sleep(2);
+		}
+		else {													// Foreground processes
+			pid_t childPid = waitpid(spawnPid, &childStatus, 0);
+			if (WIFSIGNALED(childStatus)) {						// Checks for abnormal exit
+				fprintf(stdout, "Child %d exited abnornmally, exit code: %d\n", childPid, WTERMSIG(childStatus));
+				fflush(stdout);
+				globalStatus = WTERMSIG(childStatus);
+			}
+			else {
+				fprintf(stdout, "Child %d exited normally, exit code: %d\n", childPid, WEXITSTATUS(childStatus));
+				fflush(stdout);
+				globalStatus = WEXITSTATUS(childStatus);
+			}
+		}
 		break;
 	}
+	return;
+}
+
+void handle_SIGINT(int signo) {
+	char* message = "Caught SIGINT\n";
+	write(STDOUT_FILENO, message, 15);
+
+}
+
+void handle_SIGTSTP(int signo) {
+	if (fgOnlyFlag == 0) {
+		char* message = "Entering foreground-only mode (& is now ignored)\n";
+		write(STDOUT_FILENO, message, 50);
+		fgOnlyFlag = 1;
+	}
+	else if (fgOnlyFlag == 1) {
+		char* message = "Exiting foreground-only mode\n";
+		write(STDOUT_FILENO, message, 30);
+		fgOnlyFlag = 0;
+	}
+}
+
+// SIGCHLD handler
+void handle_SIGCHLD(int signo) {
+	char* message = "Caught SIGCHLD\n";
+	write(STDOUT_FILENO, message, 15);
+}
+
+// createSignals initiates the required materials to handle signals
+void createSignals() {
+	struct sigaction SIGCHLD_action = { 0 };
+	struct sigaction SIGINT_action = { 0 };
+	struct sigaction SIGTSTP_action = { 0 };
+
+	sigset_t fgbg;
+	sigset_t shbg;
+	
+
+	// SIGCHLD handler
+	SIGCHLD_action.sa_handler = handle_SIGCHLD;
+	SIGCHLD_action.sa_flags = SA_RESTART;
+	sigaction(SIGCHLD, &SIGCHLD_action, NULL);
+
+	// SIGINT handler (ctrl+c), shell and children in background processes ignore SIGINT
+	// SIGINT should cause children in foreground to self-terminate
+	// Parent must then print PID
+	SIGINT_action.sa_handler = handle_SIGCHLD;
+	SIGINT_action.sa_flags = SA_RESTART;
+
+	// SIGTSTP handler (ctrl+z), both foreground and background children ignore SIGTSTP
+	// Parent process running the shell receives SIGSTP
+	SIGTSTP_action.sa_handler = SIG_IGN;
+	SIGTSTP_action.sa_flags = SA_RESTART;
+	sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+
 	return;
 }
 
@@ -325,9 +409,10 @@ void forkChild(struct entry* currEntry) {
 int main(int argc, char* argv[]) {
 	char* userInput;
 	int leave;
-
+	createSignals();
 	// main loop, continues until status
 	do {
+		sleep(2);
 		printf(": ");
 		userInput = readLine();
 		if (strcmp(userInput, "") == 0 || userInput[0] == '#') {
