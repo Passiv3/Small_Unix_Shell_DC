@@ -19,10 +19,8 @@
 
 /* Structure to store the user input
 */
-int globalStatus = 0;
-int processes[20];
-int processIndx = 0;
-int fgOnlyFlag = 0;
+static int globalStatus = 0;
+static int fgOnlyFlag = 0;
 
 struct entry {
 	char* command;
@@ -185,7 +183,7 @@ struct entry* buildEntry(char* userIn) {
 */
 int execute(struct entry* currEntry) {
 	if (strcmp(currEntry->command, "exit") == 0) {
-		closeProcesses(currEntry);
+		closeProcesses();
 		return 1;
 	}
 	else if (strcmp(currEntry->command, "cd") == 0){
@@ -206,8 +204,9 @@ int execute(struct entry* currEntry) {
 /* Closes all background tasks and primes program to exit
 * WIP
 */
-void closeProcesses(struct entry* currEntry) {
+void closeProcesses() {
 	int i;
+
 	return;
 }
 
@@ -303,43 +302,35 @@ void forkChild(struct entry* currEntry) {
 	};
 	int childStatus;
 	pid_t spawnPid = fork();
-	processes[processIndx] = spawnPid;
-	processIndx++;
 
 	switch (spawnPid) {
 	case -1:
 		perror("fork()\n");
+		globalStatus = 1;
 		exit(1);
 		break;
 	case 0:  // Child process
-		if (currEntry->background == 1) {
-			fprintf(stdout, "Background PID is %d\n", getpid());
-			fflush(stdout);
-		}
-
 		redirection(currEntry);
-		sleep(5);
 		execvp(currEntry->command, newArgv);
 
 		perror("execvp\n");
-		exit(EXIT_FAILURE);
+		globalStatus = 1;
+		exit(1);
 		break;
 	default:  // Parent Process
 		if (currEntry->background == 1) {						// If background is set, no wait will occur
-			fprintf(stdout, "Process continuing in background, returning to command line\n");
+			fprintf(stdout, "process %d continuing in background, returning to command line\n", spawnPid);
 			fflush(stdout);
-			pid_t childPid = waitpid(spawnPid, &childStatus, WNOHANG);
-			sleep(2);
 		}
 		else {													// Foreground processes
 			pid_t childPid = waitpid(spawnPid, &childStatus, 0);
 			if (WIFSIGNALED(childStatus)) {						// Checks for abnormal exit
-				fprintf(stdout, "Child %d exited abnornmally, exit code: %d\n", childPid, WTERMSIG(childStatus));
+				fprintf(stdout, "child %d exited abnornmally, exit code: %d\n", childPid, WTERMSIG(childStatus));
 				fflush(stdout);
 				globalStatus = WTERMSIG(childStatus);
 			}
-			else {
-				fprintf(stdout, "Child %d exited normally, exit code: %d\n", childPid, WEXITSTATUS(childStatus));
+			else {												// Otherwise, checks for normal exit
+				fprintf(stdout, "child %d exited normally, exit code: %d\n", childPid, WEXITSTATUS(childStatus));
 				fflush(stdout);
 				globalStatus = WEXITSTATUS(childStatus);
 			}
@@ -350,8 +341,8 @@ void forkChild(struct entry* currEntry) {
 }
 
 void handle_SIGINT(int signo) {
-	char* message = "Caught SIGINT\n";
-	write(STDOUT_FILENO, message, 15);
+	char* message = "Terminated by signal ";
+	write(STDOUT_FILENO, message, 21);
 
 }
 
@@ -368,31 +359,17 @@ void handle_SIGTSTP(int signo) {
 	}
 }
 
-// SIGCHLD handler
-void handle_SIGCHLD(int signo) {
-	char* message = "Caught SIGCHLD\n";
-	write(STDOUT_FILENO, message, 15);
-}
-
 // createSignals initiates the required materials to handle signals
 void createSignals() {
-	struct sigaction SIGCHLD_action = { 0 };
 	struct sigaction SIGINT_action = { 0 };
 	struct sigaction SIGTSTP_action = { 0 };
 
 	sigset_t fgbg;
 	sigset_t shbg;
 	
-
-	// SIGCHLD handler
-	SIGCHLD_action.sa_handler = handle_SIGCHLD;
-	SIGCHLD_action.sa_flags = SA_RESTART;
-	sigaction(SIGCHLD, &SIGCHLD_action, NULL);
-
 	// SIGINT handler (ctrl+c), shell and children in background processes ignore SIGINT
 	// SIGINT should cause children in foreground to self-terminate
 	// Parent must then print PID
-	SIGINT_action.sa_handler = handle_SIGCHLD;
 	SIGINT_action.sa_flags = SA_RESTART;
 
 	// SIGTSTP handler (ctrl+z), both foreground and background children ignore SIGTSTP
@@ -404,18 +381,27 @@ void createSignals() {
 	return;
 }
 
+void checkBG() {
+	int tempStatus;
+	pid_t childProcess = waitpid(-1, &tempStatus, WNOHANG);			// Check background processes
+	if (childProcess > 0) {
+		printf("background process %d has finished: exit value %d\n", childProcess, tempStatus);
+	}
+}
+
 /* main function
 */
 int main(int argc, char* argv[]) {
 	char* userInput;
 	int leave;
 	createSignals();
-	// main loop, continues until status
+
+	// main loop, continues until leave is set to 1
 	do {
-		sleep(2);
+		checkBG();
 		printf(": ");
 		userInput = readLine();
-		if (strcmp(userInput, "") == 0 || userInput[0] == '#') {
+		if (userInput[0] == '#') {
 			continue;
 		}
 		struct entry* arguments = buildEntry(userInput);
