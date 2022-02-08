@@ -18,10 +18,10 @@
 */
 
 // A few global variables
-static int globalStatus = 0;
-static int fgOnlyFlag = 0;
-static int processes[512];
-static int processIndx = 0;
+static int globalStatus = 0;		// Stores exit status for status function to retrieve
+static int fgOnlyFlag = 0;			// Flag for foreground only mode
+static int processes[512];			// Keeps track of all processes
+static int processIndx = 0;			// Index for processes
 
 /* Structure to store the user input
 */
@@ -316,8 +316,8 @@ void forkChild(struct entry* currEntry) {
 
 	int childStatus;
 	pid_t spawnPid = fork();
-	processes[processIndx] = spawnPid;
-	processIndx++;
+	processes[processIndx] = spawnPid;		// Stores process ID in global array
+	processIndx++;							// Increments global index
 	switch (spawnPid) {
 	case -1:
 		perror("fork()\n");
@@ -326,13 +326,14 @@ void forkChild(struct entry* currEntry) {
 		break;
 	case 0:  // Child process
 	{
-		// SIGINT handler (ctrl+c), background processes must ignore
+		// SIGINT handler (ctrl+c), background processes must ignore SIGINT
 		struct sigaction SIGINT_action = { 0 };
 		if (currEntry->background == 1) {
 			SIGINT_action.sa_handler = SIG_IGN;
 			SIGINT_action.sa_flags = SA_RESTART;
 			sigaction(SIGINT, &SIGINT_action, NULL);
 		}
+		// Set to default otherwise
 		else {
 			SIGINT_action.sa_handler = SIG_DFL;
 			SIGINT_action.sa_flags = SA_RESTART;
@@ -355,7 +356,7 @@ void forkChild(struct entry* currEntry) {
 	}
 	default:  // Parent Process
 		if (currEntry->background == 1) {						// If background is set, no wait will occur
-			fprintf(stdout, "process %d continuing in background, returning to command line\n", spawnPid);
+			fprintf(stdout, "process %d running in background, returning to command line\n", spawnPid);
 			fflush(stdout);
 		}
 		else {													// Foreground processes
@@ -397,7 +398,7 @@ void createSignals() {
 	
 	// SIGINT handler (ctrl+c), shell is set to ignore SIGINT
 	// SIGINT should cause children in foreground to self-terminate
-	// Parent must then print PID this is handled in the 'forkChild' function
+	// Parent must then print PID: this is handled in the 'forkChild' function
 	SIGINT_action.sa_handler = SIG_IGN;
 	SIGINT_action.sa_flags = SA_RESTART;
 	sigaction(SIGINT, &SIGINT_action, NULL);
@@ -412,6 +413,11 @@ void createSignals() {
 	return;
 }
 
+/* function checkBG takes no arguments
+* returns nothing
+* simply performs a waitpid with nohang to check if
+* any background process has completed, returns message if it has
+*/
 void checkBG() {
 	int tempStatus;
 	pid_t childProcess = waitpid(-1, &tempStatus, WNOHANG);			// Check background processes
@@ -431,20 +437,20 @@ int main(int argc, char* argv[]) {
 
 	// main loop, continues until leave is set to 1
 	do {
-		checkBG();
-		fprintf(stdout, ": ");
+		checkBG();							
+		fprintf(stdout, ": ");				// checks if background processes are complete, then prints prompt
 		fflush(stdout);
 		userInput = readLine();
-		if (userInput[0] == '#') {
+		if (userInput[0] == '#') {			// If prompt is a comment, begin loop again
 			continue;
 		}
-		struct entry* arguments = buildEntry(userInput);
+		struct entry* arguments = buildEntry(userInput);		// builds the entry from input
 		if (arguments->command == NULL) {
-			continue;
+			continue;											// Skips if there is no command
 		}
-		leave = execute(arguments);
+		leave = execute(arguments);								// leads into execute function
 
-		// cleanup
+		// (an attempt to) cleanup
 		free(userInput);
 		free(arguments->command);
 		free(arguments->redirectedOut);
@@ -456,3 +462,12 @@ int main(int argc, char* argv[]) {
 
 	return EXIT_SUCCESS;
 }
+/* CLOSING REMARKS
+* This was definitely the most difficult assignment I've ever had
+* in this program. The difficuly spike went straight up, but I 
+* appreciate being pushed in this way. I learned at paces I did
+* not think possible. As with every project I struggle with, I know
+* that this entire thing is probably terribly implemented, and I hope
+* I get better.
+* Program written by Danny Chung 02/07/22
+*/
