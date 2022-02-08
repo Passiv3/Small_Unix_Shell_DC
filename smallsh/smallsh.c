@@ -24,7 +24,7 @@ static int fgOnlyFlag = 0;
 
 struct entry {
 	char* command;
-	char* arguments;
+	char* arguments[512];
 	char* redirectedIn;
 	char* redirectedOut;
 	int background;
@@ -93,18 +93,18 @@ struct entry* buildEntry(char* userIn) {
 
 	// Wipe the structure
 	currEntry->command = NULL;
-	currEntry->arguments = NULL;
 	currEntry->redirectedIn = NULL;
 	currEntry->redirectedOut = NULL;
+	currEntry->argCounter = 0;
 	currEntry->background = 0;
 
 	size_t newSpace;
 	int counter = 0;
-	int flag = 0;		// flag 0 = initial, 1 = arguments, 2 = input, 3 = output, 4 = ampersand check
+	int flag = 0;		// flags: 0 = initial, 1 = arguments, 2 = input, 3 = output, 4 = ampersand check
 	int argFlag = 0;	// If arg flag is set, any additional arguments that are not input, output, or an ampersand are ignored
 	char* saveptr;
 	char* token = strtok_r(userIn, " ", &saveptr);			// Split first token from userIn
-
+	char* newBlockptr;
 
 	while (token != NULL) {
 		// Checks if input or output is entered, sets flag and progresses token to next value if it does
@@ -119,10 +119,12 @@ struct entry* buildEntry(char* userIn) {
 			token = strtok_r(NULL, " ", &saveptr);
 			argFlag = 1;
 		}
-		else if (strcmp(token, "&") == 0 && strtok_r(NULL, " ", &saveptr) == NULL && fgOnlyFlag == 0) {		// Only sets flag to 4 if ampersand is last value of input and fgOnly is off
+		// Only sets flag to 4 if ampersand is last value of input
+		else if (strcmp(token, "&") == 0 && strtok_r(NULL, " ", &saveptr) == NULL) {
 			flag = 4;
 		}
-		else if (argFlag == 1) {			// ignores any additional arguments if argFlag is set
+		// ignores any additional arguments if argFlag is set
+		else if (argFlag == 1) {
 			token = strtok_r(NULL, " ", &saveptr);
 			continue;
 		}
@@ -130,6 +132,7 @@ struct entry* buildEntry(char* userIn) {
 		if (strstr(token, "$$") != NULL) {
 			token = expand(token);
 		}
+
 		// switch checks flag, allocates information to structure
 		switch (flag) {
 		// case 0 will be for the command
@@ -139,22 +142,13 @@ struct entry* buildEntry(char* userIn) {
 			flag = 1;
 			break;
 		// case 1 will be for the arguments arguments will only be enterable after the command has been populated
-			// additional arguments after a redirection will simply be ignored
+		// additional arguments after a redirection will simply be ignored
 		case 1:
-			if (currEntry->arguments != NULL){
-				newSpace = sizeof(currEntry->arguments) + sizeof(token) + 2;
-				currEntry->arguments = realloc(currEntry->arguments, newSpace);
-				strcat(currEntry->arguments, " ");
-				strcat(currEntry->arguments, token);
-				counter += 1;
-				currEntry->argCounter = counter;
-			}
-			else {
-				currEntry->arguments = calloc(strlen(token) + 1, sizeof(char));
-				strcpy(currEntry->arguments, token);
-				counter += 1;
-				currEntry->argCounter = counter;
-			}
+			newBlockptr = (char*)calloc(strlen(token) + 1, sizeof(char));
+			strcpy(newBlockptr, token);
+			currEntry->arguments[currEntry->argCounter] = newBlockptr;
+			counter += 1;
+			currEntry->argCounter = counter;
 			break;
 		// case 2 is if there is a redirectedIn
 		case 2:
@@ -168,12 +162,17 @@ struct entry* buildEntry(char* userIn) {
 			break;
 		// case 4 is for the ampersand, signifying process is to be run in the background
 		case 4:
+			// Handles ampersand if foreground only mode is on
+			if (fgOnlyFlag == 1) {
+				break;
+			}
 			if (strcmp(token, "&") == 0) {
 				currEntry->background = 1;
 			}
 			break;
 		}
-		token = strtok_r(NULL, " ", &saveptr);					// Split new token
+		// Split new token
+		token = strtok_r(NULL, " ", &saveptr);
 	}
 	return currEntry;
 }
@@ -221,7 +220,7 @@ void changeDirectory(struct entry* currEntry) {
 	char cwd[256];
 
 	// If no argument given, changes directory to home
-	if (currEntry->arguments == NULL) {
+	if (currEntry->arguments[0] == NULL) {
 		chdir(homeDir);
 		fprintf(stdout, "current directory set to HOME: %s\n", getcwd(cwd, sizeof(cwd)));
 		fflush(stdout);
@@ -232,7 +231,7 @@ void changeDirectory(struct entry* currEntry) {
 		return;
 	}// chdir works with both absolute and relative paths
 	else  {
-		if (chdir(currEntry->arguments) == -1) {
+		if (chdir(currEntry->arguments[0]) == -1) {
 			fprintf(stdout, "Error has occurred");
 			fflush(stdout);
 		}
@@ -295,11 +294,21 @@ void redirection(struct entry* currEntry) {
 * Responsible for forking a child process and executing other programs
 */
 void forkChild(struct entry* currEntry) {
-	char* newArgv[] = {									// WIP, need to figure out how to make the argument from the structure
+	int i;
+	int j = 1;
+	char* newArgv[512] = {									// Populates with command, arguments, and last will be NULL
 		currEntry->command,
-		currEntry->arguments,
-		NULL
 	};
+	for (i = 0; i <= currEntry->argCounter; i++) {
+		if (i == currEntry->argCounter) {
+			newArgv[j] = NULL;
+		}
+		else {
+			newArgv[j] = currEntry->arguments[i];
+			j++;
+		}
+	}
+
 	int childStatus;
 	pid_t spawnPid = fork();
 
@@ -310,6 +319,21 @@ void forkChild(struct entry* currEntry) {
 		exit(1);
 		break;
 	case 0:  // Child process
+	{
+		// SIGINT handler (ctrl+c), background processes must ignore
+		if (currEntry->background == 1) {
+			struct sigaction SIGINT_action = { 0 };
+			SIGINT_action.sa_handler = SIG_IGN;
+			SIGINT_action.sa_flags = SA_RESTART;
+			sigaction(SIGINT, &SIGINT_action, NULL);
+		}
+		// SIGTSTP handler (ctrl+z), both foreground and background children ignore SIGTSTP
+		struct sigaction SIGTSTP_action = { 0 };
+		SIGTSTP_action.sa_handler = SIG_IGN;
+		SIGTSTP_action.sa_flags = SA_RESTART;
+		sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+
+		// Handles redirection and then executes
 		redirection(currEntry);
 		execvp(currEntry->command, newArgv);
 
@@ -317,6 +341,7 @@ void forkChild(struct entry* currEntry) {
 		globalStatus = 1;
 		exit(1);
 		break;
+	}
 	default:  // Parent Process
 		if (currEntry->background == 1) {						// If background is set, no wait will occur
 			fprintf(stdout, "process %d continuing in background, returning to command line\n", spawnPid);
@@ -330,8 +355,6 @@ void forkChild(struct entry* currEntry) {
 				globalStatus = WTERMSIG(childStatus);
 			}
 			else {												// Otherwise, checks for normal exit
-				fprintf(stdout, "child %d exited normally, exit code: %d\n", childPid, WEXITSTATUS(childStatus));
-				fflush(stdout);
 				globalStatus = WEXITSTATUS(childStatus);
 			}
 		}
@@ -342,39 +365,39 @@ void forkChild(struct entry* currEntry) {
 
 void handle_SIGINT(int signo) {
 	char* message = "Terminated by signal ";
-	write(STDOUT_FILENO, message, 21);
+	write(STDOUT_FILENO, message, 22);
 
 }
 
 void handle_SIGTSTP(int signo) {
 	if (fgOnlyFlag == 0) {
-		char* message = "Entering foreground-only mode (& is now ignored)\n";
-		write(STDOUT_FILENO, message, 50);
+		char* message = "Entering foreground-only mode (& is now ignored)\n: ";
+		write(STDOUT_FILENO, message, 52);
 		fgOnlyFlag = 1;
 	}
 	else if (fgOnlyFlag == 1) {
-		char* message = "Exiting foreground-only mode\n";
-		write(STDOUT_FILENO, message, 30);
+		char* message = "Exiting foreground-only mode\n: ";
+		write(STDOUT_FILENO, message, 33);
 		fgOnlyFlag = 0;
 	}
 }
 
-// createSignals initiates the required materials to handle signals
+// createSignals initiates the required materials to handle signals for the shell
 void createSignals() {
 	struct sigaction SIGINT_action = { 0 };
 	struct sigaction SIGTSTP_action = { 0 };
-
-	sigset_t fgbg;
-	sigset_t shbg;
 	
-	// SIGINT handler (ctrl+c), shell and children in background processes ignore SIGINT
+	// SIGINT handler (ctrl+c), shell is set to ignore SIGINT
 	// SIGINT should cause children in foreground to self-terminate
 	// Parent must then print PID
+	SIGINT_action.sa_handler = handle_SIGINT;
 	SIGINT_action.sa_flags = SA_RESTART;
+	sigaction(SIGINT, &SIGINT_action, NULL);
 
-	// SIGTSTP handler (ctrl+z), both foreground and background children ignore SIGTSTP
+
+	// SIGTSTP handler (ctrl+z), shell is set to change to foreground only mode
 	// Parent process running the shell receives SIGSTP
-	SIGTSTP_action.sa_handler = SIG_IGN;
+	SIGTSTP_action.sa_handler = handle_SIGTSTP;
 	SIGTSTP_action.sa_flags = SA_RESTART;
 	sigaction(SIGTSTP, &SIGTSTP_action, NULL);
 
@@ -385,7 +408,8 @@ void checkBG() {
 	int tempStatus;
 	pid_t childProcess = waitpid(-1, &tempStatus, WNOHANG);			// Check background processes
 	if (childProcess > 0) {
-		printf("background process %d has finished: exit value %d\n", childProcess, tempStatus);
+		fprintf(stdout, "background process %d has finished: exit value %d\n", childProcess, tempStatus);
+		fflush(stdout);
 	}
 }
 
@@ -395,11 +419,13 @@ int main(int argc, char* argv[]) {
 	char* userInput;
 	int leave;
 	createSignals();
+	int i;
 
 	// main loop, continues until leave is set to 1
 	do {
 		checkBG();
-		printf(": ");
+		fprintf(stdout, ": ");
+		fflush(stdout);
 		userInput = readLine();
 		if (userInput[0] == '#') {
 			continue;
@@ -410,9 +436,14 @@ int main(int argc, char* argv[]) {
 		}
 		leave = execute(arguments);
 
+		// cleanup
 		free(userInput);
-		free(arguments);
-
+		free(arguments->command);
+		free(arguments->redirectedOut);
+		free(arguments->redirectedIn);
+		for (i = 0; i < arguments->argCounter; i++) {
+			free(arguments->arguments[i]);
+		}
 	} while (leave == 0);
 
 	return EXIT_SUCCESS;
