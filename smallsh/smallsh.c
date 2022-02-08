@@ -17,11 +17,14 @@
 * separate
 */
 
-/* Structure to store the user input
-*/
+// A few global variables
 static int globalStatus = 0;
 static int fgOnlyFlag = 0;
+static int processes[512];
+static int processIndx = 0;
 
+/* Structure to store the user input
+*/
 struct entry {
 	char* command;
 	char* arguments[512];
@@ -57,9 +60,8 @@ char* expand(char* ptrToToken) {
 	int i;
 	int j = 0;
 	int n;
-
-	pid_t getpid();
-	sprintf(pidStr, "%d", getpid);
+	
+	sprintf(pidStr, "%d", getpid());
 	// Counts the occurences of $$ to allocate sufficient memory
 	while (tmp = strstr(tmp, "$$")) {
 		count++;
@@ -179,6 +181,7 @@ struct entry* buildEntry(char* userIn) {
 
 /* function execute
 * takes pointer to entry structure
+* redirects to proper function depending on first input
 */
 int execute(struct entry* currEntry) {
 	if (strcmp(currEntry->command, "exit") == 0) {
@@ -200,12 +203,13 @@ int execute(struct entry* currEntry) {
 	return 0;
 }
 
-/* Closes all background tasks and primes program to exit
-* WIP
+/* Closes all tasks and primes program to exit
 */
 void closeProcesses() {
 	int i;
-
+	for (i = 0; i < processIndx; i++) {
+		kill(processes[i], SIGTERM);
+	}
 	return;
 }
 
@@ -245,7 +249,8 @@ void changeDirectory(struct entry* currEntry) {
 
 /*Returns the status*/
 void getStatus(struct entry* currEntry) {
-	printf("exit value %d\n", globalStatus);
+	fprintf(stdout, "exit value %d\n", globalStatus);
+	fflush(stdout);
 	return;
 }
 
@@ -311,7 +316,8 @@ void forkChild(struct entry* currEntry) {
 
 	int childStatus;
 	pid_t spawnPid = fork();
-
+	processes[processIndx] = spawnPid;
+	processIndx++;
 	switch (spawnPid) {
 	case -1:
 		perror("fork()\n");
@@ -321,9 +327,14 @@ void forkChild(struct entry* currEntry) {
 	case 0:  // Child process
 	{
 		// SIGINT handler (ctrl+c), background processes must ignore
+		struct sigaction SIGINT_action = { 0 };
 		if (currEntry->background == 1) {
-			struct sigaction SIGINT_action = { 0 };
 			SIGINT_action.sa_handler = SIG_IGN;
+			SIGINT_action.sa_flags = SA_RESTART;
+			sigaction(SIGINT, &SIGINT_action, NULL);
+		}
+		else {
+			SIGINT_action.sa_handler = SIG_DFL;
 			SIGINT_action.sa_flags = SA_RESTART;
 			sigaction(SIGINT, &SIGINT_action, NULL);
 		}
@@ -363,12 +374,9 @@ void forkChild(struct entry* currEntry) {
 	return;
 }
 
-void handle_SIGINT(int signo) {
-	char* message = "Terminated by signal ";
-	write(STDOUT_FILENO, message, 22);
-
-}
-
+/* function for handling SIGTSTP in the parent shell
+* Enters/exits foreground-only mode
+*/
 void handle_SIGTSTP(int signo) {
 	if (fgOnlyFlag == 0) {
 		char* message = "Entering foreground-only mode (& is now ignored)\n: ";
@@ -377,7 +385,7 @@ void handle_SIGTSTP(int signo) {
 	}
 	else if (fgOnlyFlag == 1) {
 		char* message = "Exiting foreground-only mode\n: ";
-		write(STDOUT_FILENO, message, 33);
+		write(STDOUT_FILENO, message, 32);
 		fgOnlyFlag = 0;
 	}
 }
@@ -389,8 +397,8 @@ void createSignals() {
 	
 	// SIGINT handler (ctrl+c), shell is set to ignore SIGINT
 	// SIGINT should cause children in foreground to self-terminate
-	// Parent must then print PID
-	SIGINT_action.sa_handler = handle_SIGINT;
+	// Parent must then print PID this is handled in the 'forkChild' function
+	SIGINT_action.sa_handler = SIG_IGN;
 	SIGINT_action.sa_flags = SA_RESTART;
 	sigaction(SIGINT, &SIGINT_action, NULL);
 
